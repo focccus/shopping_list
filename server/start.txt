@@ -1,0 +1,3 @@
+npm i
+npm i -g forever
+forever start -a -o  Logs/out.log -e  Logs/err.log server.js
