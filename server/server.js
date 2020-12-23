@@ -1,59 +1,67 @@
 const fs = require("fs"),
   url = require("url"),
-  path = require("path");
+  path = require("path"),
+  express = require("express"),
+  cors = require("cors"),
+  Datastore = require("nedb"),
+  app = express(),
+  server = require("http").createServer(app),
+  io = require("socket.io")(server);
 
-var app = require("http").createServer((req, res) => {
-  function sendFile(filename, headers = {}) {
-    if (fs.statSync(filename).isDirectory()) filename += "/index.html";
+app.use(express.static("web"));
+app.use(express.json());
+app.use(cors());
 
-    fs.readFile(filename, "binary", function (err, file) {
-      if (err) {
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.write(err + "\n");
-        res.end();
-        return;
-      }
-
-      res.writeHead(200, headers);
-      res.write(file, "binary");
-      res.end();
-    });
-  }
-
-  console.log(req.url);
-  if (req.url === "/app") {
-    return sendFile("./download/Einkauf.apk", {
-      "Content-Type": "application/octet-stream",
-      "Content-Disposition": "attachment; filename=Einkauf.apk",
-      "Content-Transfer-Encoding": "binary",
-    });
-  }
-
-  var uri = url.parse(req.url).pathname,
-    filename = path.join(process.cwd() + "/web/", uri);
-
-  fs.exists(filename, function (exists) {
-    if (!exists) {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.write("404 Not Found\n");
-      res.end();
-      return;
-    }
-  });
-
-  sendFile(filename);
+app.get("/", (_, res) => {
+  res.sendFile(__dirname + "/web/index.html");
 });
 
-var Datastore = require("nedb");
-var io = require("socket.io")(app);
-app.listen(8090, "0.0.0.0");
-console.log("Server started on 0.0.0.0:8090");
+app.get("/app", (_, res) => {
+  res.sendFile(__dirname + "/download/Einkauf.apk");
+});
+
+var recipes = new Datastore({
+  filename: "data/recipes.db",
+  autoload: true,
+});
+
+app.post("/syncrecipes", async (req, res) => {
+  let time = parseInt(req.query.last) || 0;
+
+  console.log(req.body);
+
+  if (req.body && Array.isArray(req.body)) {
+    for (let recipe of req.body) {
+      if (recipe.id && recipe.name) {
+        recipe.synced = Date.now();
+
+        console.log(recipe);
+
+        recipes.update(
+          { id: recipe.id },
+          { $set: recipe },
+          { upsert: true },
+          (err, num) => {
+            if (err) console.log(err);
+          }
+        );
+      }
+    }
+  }
+
+  recipes.find({ synced: { $gt: time } }, (err, items) => {
+    if (err) console.log(err);
+    res.send(items);
+  });
+});
+
+// socket io
 var history = new Datastore({ filename: "data/history.db", autoload: true });
 var items = new Datastore({ filename: "data/items.db", autoload: true });
 
 var _sockets = new Set();
 
-io.on("connection", function (socket) {
+io.on("connection", (socket) => {
   console.log(">>>>>>> new connection", socket.handshake.query.timestamp);
   _sockets.add(socket);
   socket.on("add", (data) => {
@@ -79,8 +87,6 @@ io.on("connection", function (socket) {
   });
   socket.on("remove", (data) => {
     if (data.id) {
-      console.log(data);
-
       items.remove({ _id: data.id }, (err, num) => {
         console.log(num);
         if (err) console.log(err);
@@ -120,3 +126,6 @@ io.on("connection", function (socket) {
     console.log(">>>>>>> Total Sockets", _sockets.size);
   });
 });
+
+server.listen(8090, "0.0.0.0");
+console.log("Server started on 0.0.0.0:8090");
